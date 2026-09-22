@@ -1,0 +1,4 @@
+<!-- {{PAGE_PATH}}.wxml -->
+<view class="container">
+  <text class="title">{{title}}</text>
+</view>
