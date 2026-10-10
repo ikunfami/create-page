@@ -1,9 +1,11 @@
 ---
 name: create-page
-description: Detect the project type (native WeChat Mini Program, uniapp, Vue, React) and automatically create a page from the user's page name, registering the route. Use when the user asks to "create a page / add a page / new page".
+description: Detect the project type (native WeChat Mini Program, uniapp, Vue, React) and automatically create one or more pages from the user's page names, registering the routes. Supports batch creation — separate multiple pages with 、 , or newlines. Use when the user asks to "create a page / add pages / new page / 批量创建页面".
 ---
 
-# create-page: create a page matching the project type
+# create-page: create pages matching the project type
+
+Supports **single page** and **batch creation** (multiple pages in one request). Steps 1–2 (detection) run once per request; steps 3–5 loop per page.
 
 ## Workflow
 
@@ -27,19 +29,26 @@ Also collect the following context (it determines template details):
 - **Page directory and naming conventions**: check where existing pages live (`src/views` vs `src/pages`, etc.) and whether file names are kebab-case or PascalCase. **The new page must follow the project's existing conventions.**
 - **React routing style**: look for a react-router config file; if it is Next.js (has `pages/` or `app/` directory), use file-based routing.
 
-### 2. Native Mini Program / uniapp: subpackage detection
+### 2. Native Mini Program / uniapp: subpackage detection (asked once per request)
 
 Read `app.json` (native mini program) or `pages.json` (uniapp):
 
-- If a non-empty `subPackages` field exists (also accept the legacy `subpackages` key) → use AskUserQuestion to list every subpackage (`root` path + name) plus a "main package" option, and let the user choose which package the page goes into.
+- If a non-empty `subPackages` field exists (also accept the legacy `subpackages` key) → use AskUserQuestion to list every subpackage (`root` path + name) plus a "main package" option, and let the user choose which package the page(s) go into. **With multiple pages, all pages default to the chosen package** — state this in the question (e.g. "以下 N 个页面全部放入所选包"); only ask again if the user explicitly wants different packages for different pages.
 - If there is no subpackage → proceed with the main package normally.
 
-### 3. Parse the user input
+### 3. Parse the user input (single or multiple pages)
 
-Parse from the user's input:
+First split the input into page entries — separators: `、` `，` `,` or newlines. Examples:
+
+- `创建页面 用户列表 user-list` → 1 entry
+- `创建页面 用户列表 user-list、订单详情 order-detail、设置 settings` → 3 entries
+- A bare word like `批量创建页面` with no entry following → ask for the page list.
+
+For **each** entry, parse:
 
 - The Chinese part → page title (e.g. "用户列表")
-- The English part → page name (e.g. `user-list`); if only Chinese is given, convert it to a pinyin-style kebab-case name or confirm the English name with the user
+- The English part → page name (e.g. `user-list`)
+- If only Chinese is given: confirm the English name with the user when there is just **one** page; for **batch** requests, auto-convert each to a pinyin-style kebab-case name and present the full mapping list for one-shot confirmation instead of asking per page.
 - Convert the page name following the project's existing naming convention (kebab-case or PascalCase)
 
 Placeholder conventions (replaced inside templates):
@@ -49,7 +58,7 @@ Placeholder conventions (replaced inside templates):
 - `{{PAGE_TITLE}}`: page title
 - `{{PAGE_PATH}}`: full path used for route registration (e.g. `pages/user-list/user-list`)
 
-### 4. Generate the page files
+### 4. Generate the page files (loop over every page)
 
 Templates live in the `templates/` directory of this skill:
 
@@ -66,16 +75,19 @@ Templates live in the `templates/` directory of this skill:
 
 Additional rules:
 
+- Apply the table above **per page**, looping until every parsed page has been generated.
 - If the project uses scss/less, change the style file extension accordingly (content unchanged).
 - For uniapp/Vue projects using TS, change `<script setup>` to `<script setup lang="ts">`.
 - Do not add `usingComponents` (mini program) or easycom config (uniapp); keep the templates as-is.
-- **If the target file already exists: do not overwrite it.** Tell the user and ask (rename or cancel).
+- **If a target file already exists: do not overwrite it.** Skip that page, record it as "skipped (already exists)", and continue with the remaining pages. At the end, ask the user whether to rename or cancel the skipped ones.
 
-### 5. Register the route
+### 5. Register the routes (append all at once)
 
-- **Native mini program**: append the path to the end of the main `pages` array in `app.json`, or the `pages` array of the chosen subpackage (subpackage paths omit the root prefix, e.g. `"user-list/user-list"`). **Never insert at index 0** — the first entry is the mini program home page.
-- **uniapp**: same as above, edit `pages.json`.
-- **Vue (vue-router)**: append to the router config file:
+Collect the route entries of **all successfully generated pages** first, then register them in a single edit per file:
+
+- **Native mini program**: append every path to the end of the main `pages` array in `app.json`, or the `pages` array of the chosen subpackage (subpackage paths omit the root prefix, e.g. `"user-list/user-list"`). **Never insert at index 0** — the first entry is the mini program home page. Edit the file once, adding all new entries in one operation.
+- **uniapp**: same as above, edit `pages.json` once with all new entries.
+- **Vue (vue-router)**: append one object per page to the router config file:
   ```js
   {
     path: '/{{PAGE_NAME}}',
@@ -84,10 +96,17 @@ Additional rules:
     meta: { title: '{{PAGE_TITLE}}' },
   }
   ```
-  Follow the router file's existing style (skip `meta` if the project does not use it). For file-based routing projects (unplugin-vue-router, Nuxt), only create the file — the route is generated automatically.
-- **React (react-router)**: append the path and the import at the route config, following the project's existing style (`element` for v6, `component` for v5).
-- **Next.js**: for the pages directory, placing the file at `pages/{{PAGE_NAME}}.tsx` is enough; for the app directory, create `app/{{PAGE_NAME}}/page.tsx`.
+  Follow the router file's existing style (skip `meta` if the project does not use it). For file-based routing projects (unplugin-vue-router, Nuxt), only create the files — the routes are generated automatically.
+- **React (react-router)**: append every path and import at the route config in one edit, following the project's existing style (`element` for v6, `component` for v5).
+- **Next.js**: for the pages directory, placing each file at `pages/{{PAGE_NAME}}.tsx` is enough; for the app directory, create `app/{{PAGE_NAME}}/page.tsx` per page.
 
 ### 6. Report
 
-When done, report: the detected project type, the list of created files, where the route was registered (file + line number), and the page access path (e.g. `/pages/user-list/user-list`).
+When done, report: the detected project type, then a summary table with one row per page:
+
+| 页面 | 创建的文件 | 路由注册位置 | 访问路径 | 状态 |
+|---|---|---|---|---|
+| UserList 用户列表 | `src/views/user-list/index.vue` | `src/router/index.ts:42` | `/user-list` | 成功 |
+| OrderDetail 订单详情 | — | — | — | 已存在，跳过 |
+
+End with the overall result: N created, M skipped, and remind the user of any skipped pages awaiting their decision (rename or cancel).
